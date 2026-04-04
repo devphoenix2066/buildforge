@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+pydantic
+numpy
+openai
+requests
+stable-baselines3
+gymnasium

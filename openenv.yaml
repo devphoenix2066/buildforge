@@ -1,0 +1,73 @@
+name: buildforge
+version: "1.0.0"
+description: >
+  A dynamic build orchestration environment where an RL agent manages
+  parallel interdependent build components. The agent must monitor,
+  recover, and optimize a simulated software build pipeline in real time.
+
+author: your-name-here
+tags:
+  - orchestration
+  - build-systems
+  - reinforcement-learning
+  - software-engineering
+
+tasks:
+  - name: simple_build
+    difficulty: easy
+    max_steps: 20
+    description: "3 components, simple dependencies, no failures expected"
+
+  - name: cascading_failure
+    difficulty: medium
+    max_steps: 30
+    description: "5 components, random failures, agent must recover"
+
+  - name: race_condition_recovery
+    difficulty: hard
+    max_steps: 40
+    description: "5 components, multiple simultaneous failures"
+
+observation_space:
+  type: object
+  fields:
+    components:
+      type: dict
+      description: "Status, progress and reward for each build component"
+    blocked_components:
+      type: list
+      description: "List of currently blocked component names"
+    critical_failure:
+      type: bool
+      description: "True if 2+ components have failed simultaneously"
+    time_elapsed:
+      type: int
+      description: "Number of steps taken so far"
+
+action_space:
+  type: object
+  fields:
+    action_type:
+      type: string
+      values: ["boost", "pause", "resume", "restart", "noop"]
+    target:
+      type: string
+      description: "Component name to act on (null for noop)"
+
+reward:
+  range: [-1.0, 1.0]
+  description: >
+    Per step reward based on component progress (+0.1), failures (-0.3),
+    blocked idle components (-0.1), completions (+0.5), and orchestrator
+    actions (boost +0.3, restart +0.3, correct pause +0.2).
+
+endpoint:
+  reset: POST /reset
+  step: POST /step
+  state: GET /state
+
+inference:
+  script: inference.py
+  model_env_var: MODEL_NAME
+  api_base_env_var: API_BASE_URL
+  api_key_env_var: HF_TOKEN
