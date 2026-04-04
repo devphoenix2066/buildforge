@@ -6,7 +6,7 @@ build-backend = "setuptools.backends.legacy:build"
 name = "buildforge"
 version = "1.0.0"
 description = "A dynamic build orchestration environment for OpenEnv"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "fastapi",
     "uvicorn",
@@ -16,10 +16,11 @@ dependencies = [
     "requests",
     "stable-baselines3",
     "gymnasium",
+    "openenv-core>=0.2.0",
 ]
 
-[project.optional-dependencies]
-dev = ["pytest"]
+[project.scripts]
+server = "server:app"
 
 [tool.setuptools.packages.find]
 where = ["."]
