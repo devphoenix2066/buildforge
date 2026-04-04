@@ -1,3 +1,12 @@
+---
+title: BuildForge
+emoji: 🏗️
+colorFrom: blue
+colorTo: green
+sdk: docker
+pinned: false
+---
+
 # BuildForge 🏗️
 
 A dynamic build orchestration environment for the OpenEnv Hackathon.
