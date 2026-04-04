@@ -149,19 +149,15 @@ def get_agent_action(client: OpenAI, obs: dict, step: int, last_reward: float) -
 
 # ---------- Fallback Rule-Based Agent ----------
 def rule_based_action(obs: dict) -> dict:
-    """
-    Simple rule-based fallback if LLM is unavailable.
-    Priority: restart failed → resume paused (if dep done) → pause blocked → boost near-complete → noop
-    """
     components = obs["components"]
+    from environment.tasks import DEPENDENCIES
 
-    # Priority 1 — restart any failed component
+    # Priority 1 — restart any failed component immediately
     for name, data in components.items():
         if data["status"] == "failed":
             return {"action_type": "restart", "target": name}
 
-    # Priority 2 — resume paused components if their dependencies are done
-    from environment.tasks import DEPENDENCIES
+    # Priority 2 — resume paused components if deps are done
     for name, data in components.items():
         if data["status"] == "paused":
             deps = DEPENDENCIES.get(name, [])
@@ -173,18 +169,29 @@ def rule_based_action(obs: dict) -> dict:
             if deps_done:
                 return {"action_type": "resume", "target": name}
 
-    # Priority 3 — pause blocked components
+    # Priority 3 — boost any running component aggressively
+    # First boost whoever is closest to completion
+    best_name = None
+    best_progress = -1
+    for name, data in components.items():
+        if data["status"] == "running" and data["progress"] > best_progress:
+            best_progress = data["progress"]
+            best_name = name
+
+    if best_name and best_progress > 0.4:
+        return {"action_type": "boost", "target": best_name}
+
+    # Priority 4 — pause blocked components
     for name, data in components.items():
         if data["status"] == "blocked":
             return {"action_type": "pause", "target": name}
 
-    # Priority 4 — boost near-complete running components
-    for name, data in components.items():
-        if data["status"] == "running" and data["progress"] > 0.7:
-            return {"action_type": "boost", "target": name}
+    # Priority 5 — boost anything running even at low progress
+    if best_name:
+        return {"action_type": "boost", "target": best_name}
 
     return {"action_type": "noop", "target": None}
-
+    
 # ---------- Main ----------
 def run_task(client: Optional[OpenAI], task: dict):
     name       = task["name"]
