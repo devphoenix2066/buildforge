@@ -1,8 +1,8 @@
 """
 BuildForge Inference Script
 ===========================
-Baseline agent that runs against the BuildForge environment.
-Uses an LLM via OpenAI-compatible API to make orchestration decisions.
+Hybrid LLM + rule-based agent for BuildForge hackathon.
+Uses LLM decisions, but enforces critical rules for reliability.
 
 Emits structured stdout logs in OpenEnv format:
   [START] task=<task> env=<env> model=<model>
@@ -17,19 +17,22 @@ import textwrap
 from typing import List, Optional
 from openai import OpenAI
 
+from environment.tasks import DEPENDENCIES, Status
+
 # ---------- Config ----------
 API_KEY      = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME   = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+MODEL_NAME   = os.getenv("MODEL_NAME", "llama-3.3-70b-versatile")
 ENV_URL      = os.getenv("ENV_URL", "http://localhost:7860")
 BENCHMARK    = "buildforge"
 MAX_STEPS    = 40
 SUCCESS_SCORE_THRESHOLD = 0.4
 
 TASKS = [
-    {"name": "simple_build",           "difficulty": "easy"},
-    {"name": "cascading_failure",      "difficulty": "medium"},
-    {"name": "race_condition_recovery","difficulty": "hard"},
+    {"name": "simple_build",            "difficulty": "easy"},
+    {"name": "cascading_failure",       "difficulty": "medium"},
+    {"name": "race_condition_recovery", "difficulty": "hard"},
+    {"name": "hotfix_deploy",           "difficulty": "hotfix"},
 ]
 
 # ---------- Logging ----------
@@ -43,7 +46,6 @@ def log_step(step: int, action: str, reward: float, done: bool, error: Optional[
 def log_end(success: bool, steps: int, score: float, rewards: List[float]):
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
     print(f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}", flush=True)
-
 
 # ---------- Environment API ----------
 def env_reset(difficulty: str) -> dict:
@@ -61,33 +63,29 @@ def env_state() -> dict:
     r.raise_for_status()
     return r.json()
 
-
 # ---------- LLM Agent ----------
 SYSTEM_PROMPT = textwrap.dedent("""
     You are an intelligent build orchestration agent.
     You manage a parallel software build pipeline with these components:
-      - dep_resolver:     resolves dependencies (must finish first)
-      - backend_compiler: compiles backend code
-      - frontend_builder: builds frontend
-      - static_analyzer:  checks code quality
-      - test_runner:      runs tests (needs backend + static_analyzer done)
-
-    At each step you observe the status of all components and must choose ONE action:
+      - dep_resolver
+      - backend_compiler
+      - frontend_builder
+      - static_analyzer
+      - test_runner
 
     Actions:
       boost   <component>  — speed up a RUNNING component
-      pause   <component>  — pause a BLOCKED component (saves resources)
+      pause   <component>  — pause a BLOCKED component
       resume  <component>  — resume a PAUSED component
-      restart <component>  — restart a FAILED component (critical!)
+      restart <component>  — restart a FAILED component
       noop                 — do nothing
 
-    Rules:
-      - Always restart FAILED components immediately
-      - Pause BLOCKED components that are waiting on unfinished dependencies
-      - Boost components that are close to completion (progress > 0.7)
-      - Use noop only when everything is running smoothly
+    Critical rules:
+      - Never choose noop if a component can be boosted.
+      - Always restart FAILED components immediately.
+      - Always resume PAUSED components if dependencies are done.
 
-    Respond with JSON only. No explanation. Format:
+    Respond with JSON only:
     {"action_type": "restart", "target": "backend_compiler"}
     or
     {"action_type": "noop", "target": null}
@@ -108,7 +106,7 @@ def build_user_prompt(obs: dict, step: int, last_reward: float) -> str:
     comp_str = "\n".join(comp_lines)
 
     return textwrap.dedent(f"""
-        Step: {step}
+        Step: {step}/{MAX_STEPS}
         Last reward: {last_reward:.2f}
         Time elapsed: {elapsed}
         Critical failure: {critical}
@@ -130,14 +128,14 @@ def get_agent_action(client: OpenAI, obs: dict, step: int, last_reward: float) -
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user",   "content": prompt},
             ],
-            temperature=0.2,
+            temperature=0.3,
             max_tokens=50,
             stream=False,
         )
         text = (completion.choices[0].message.content or "").strip()
-        # Strip markdown fences if model wraps in ```json
         text = text.replace("```json", "").replace("```", "").strip()
         parsed = json.loads(text)
+
         # Validate
         if parsed.get("action_type") not in ["boost","pause","resume","restart","noop"]:
             return {"action_type": "noop", "target": None}
@@ -146,53 +144,31 @@ def get_agent_action(client: OpenAI, obs: dict, step: int, last_reward: float) -
         print(f"[DEBUG] LLM error: {e}", flush=True)
         return {"action_type": "noop", "target": None}
 
-
-# ---------- Fallback Rule-Based Agent ----------
-def rule_based_action(obs: dict) -> dict:
+# ---------- Hybrid Rule Enforcement ----------
+def enforce_rules(obs: dict, action: dict) -> dict:
     components = obs["components"]
-    from environment.tasks import DEPENDENCIES
 
-    # Priority 1 — restart any failed component immediately
-    for name, data in components.items():
-        if data["status"] == "failed":
+    # Restart any failed component immediately
+    for name, c in components.items():
+        if c["status"] == Status.FAILED.value:
             return {"action_type": "restart", "target": name}
 
-    # Priority 2 — resume paused components if deps are done
-    for name, data in components.items():
-        if data["status"] == "paused":
-            deps = DEPENDENCIES.get(name, [])
-            deps_done = all(
-                components[d]["status"] == "done"
-                for d in deps
-                if d in components
-            )
+    # Resume paused components if deps done
+    for name, c in components.items():
+        if c["status"] == Status.PAUSED.value:
+            deps_done = all(components[d]["status"] == Status.DONE.value for d in DEPENDENCIES.get(name, []))
             if deps_done:
                 return {"action_type": "resume", "target": name}
 
-    # Priority 3 — boost any running component aggressively
-    # First boost whoever is closest to completion
-    best_name = None
-    best_progress = -1
-    for name, data in components.items():
-        if data["status"] == "running" and data["progress"] > best_progress:
-            best_progress = data["progress"]
-            best_name = name
+    # Boost running components with progress > 0.5
+    for name, c in components.items():
+        if c["status"] == Status.RUNNING.value and c["progress"] > 0.5:
+            return {"action_type": "boost", "target": name}
 
-    if best_name and best_progress > 0.4:
-        return {"action_type": "boost", "target": best_name}
+    # Otherwise, keep LLM choice
+    return action
 
-    # Priority 4 — pause blocked components
-    for name, data in components.items():
-        if data["status"] == "blocked":
-            return {"action_type": "pause", "target": name}
-
-    # Priority 5 — boost anything running even at low progress
-    if best_name:
-        return {"action_type": "boost", "target": best_name}
-
-    return {"action_type": "noop", "target": None}
-    
-# ---------- Main ----------
+# ---------- Main Loop ----------
 def run_task(client: Optional[OpenAI], task: dict):
     name       = task["name"]
     difficulty = task["difficulty"]
@@ -212,10 +188,12 @@ def run_task(client: Optional[OpenAI], task: dict):
             if result.get("done"):
                 break
 
-            # Get action from LLM or fallback
             if client:
                 action = get_agent_action(client, obs, step, last_reward)
+                action = enforce_rules(obs, action)
             else:
+                # Fallback rule-based agent
+                from environment.tasks import rule_based_action
                 action = rule_based_action(obs)
 
             action_type = action.get("action_type", "noop")
@@ -250,19 +228,18 @@ def run_task(client: Optional[OpenAI], task: dict):
 
 
 def main():
-    # Try to init LLM client — fall back to rule-based if no API key
     client = None
     if API_KEY:
         try:
             client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
-            print(f"[DEBUG] LLM client initialized: {MODEL_NAME}", flush=True)
+            print(f"[DEBUG] LLM initialized: {MODEL_NAME}", flush=True)
         except Exception as e:
             print(f"[DEBUG] LLM init failed: {e} — using rule-based agent", flush=True)
     else:
-        print("[DEBUG] No API key found — using rule-based agent", flush=True)
+        print("[DEBUG] No API key — using rule-based agent", flush=True)
 
     for task in TASKS:
-        print(f"\n[DEBUG] Running task: {task['name']}", flush=True)
+        print(f"\n[DEBUG] Running {task['name']}", flush=True)
         run_task(client, task)
         print(flush=True)
 
