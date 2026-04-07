@@ -31,8 +31,7 @@ SUCCESS_SCORE_THRESHOLD = 0.4
 TASKS = [
     {"name": "simple_build",            "difficulty": "easy"},
     {"name": "cascading_failure",       "difficulty": "medium"},
-    {"name": "race_condition_recovery", "difficulty": "hard"},
-    {"name": "hotfix_deploy",           "difficulty": "hotfix"},
+    {"name": "race_condition_recovery", "difficulty": "hard"}
 ]
 
 # ---------- Logging ----------
