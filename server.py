@@ -6,25 +6,13 @@ from environment.env import BuildForgeEnv, Action, StepResult
 
 app = FastAPI(title="BuildForge OpenEnv Server")
 
-# Global environment instance
 env: Optional[BuildForgeEnv] = None
 
 
 # ---------- Request Models ----------
 
-@app.post("/reset")
-def reset(req: ResetRequest = None):
-    global env
-    if req is None:
-        difficulty = "easy"
-    else:
-        difficulty = req.difficulty or "easy"
-    if difficulty not in ["easy", "medium", "hard", "hotfix"]:
-        raise HTTPException(status_code=400, detail="difficulty must be easy, medium, or hard")
-    env = BuildForgeEnv(difficulty=difficulty)
-    result = env.reset()
-    return result.dict()
-
+class ResetRequest(BaseModel):
+    difficulty: Optional[str] = "easy"
 
 class StepRequest(BaseModel):
     action_type: str
@@ -34,11 +22,13 @@ class StepRequest(BaseModel):
 # ---------- Routes ----------
 
 @app.post("/reset")
-def reset(req: ResetRequest):
+def reset(req: Optional[ResetRequest] = None):
     global env
-    difficulty = req.difficulty or "easy"
+    difficulty = "easy"
+    if req is not None and req.difficulty:
+        difficulty = req.difficulty
     if difficulty not in ["easy", "medium", "hard"]:
-        raise HTTPException(status_code=400, detail="difficulty must be easy, medium, or hard")
+        difficulty = "easy"
     env = BuildForgeEnv(difficulty=difficulty)
     result = env.reset()
     return result.dict()
@@ -98,6 +88,7 @@ def health():
 
 def main():
     uvicorn.run(app, host="0.0.0.0", port=7860)
+
 
 if __name__ == "__main__":
     main()
