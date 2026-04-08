@@ -12,7 +12,7 @@ def grade_easy(components: Dict[str, Component], steps_taken: int, max_steps: in
     failure_penalty = failed * 0.15
 
     score = completion_score + speed_bonus - failure_penalty
-    return round(min(max(score, 0.0), 1.0), 3)
+    return round(min(max(score, 0.01), 0.99), 3)
 
 
 def grade_medium(components: Dict[str, Component], steps_taken: int, max_steps: int,
@@ -27,7 +27,7 @@ def grade_medium(components: Dict[str, Component], steps_taken: int, max_steps: 
     speed_bonus = max(0.0, 1.0 - (steps_taken / max_steps)) * 0.25
 
     score = completion_score + recovery_bonus + speed_bonus - cascade_penalty
-    return round(min(max(score, 0.0), 1.0), 3)
+    return round(min(max(score, 0.01), 0.99), 3)
 
 
 def grade_hard(components: Dict[str, Component], steps_taken: int, max_steps: int,
@@ -43,7 +43,7 @@ def grade_hard(components: Dict[str, Component], steps_taken: int, max_steps: in
     speed_bonus = max(0.0, 1.0 - (steps_taken / max_steps)) * 0.25
 
     score = completion_score + recovery_bonus + pause_bonus + speed_bonus - cascade_penalty
-    return round(min(max(score, 0.0), 1.0), 3)
+    return round(min(max(score, 0.01), 0.99), 3)
 
 
 def compute_grade(difficulty: str, components: Dict[str, Component],
